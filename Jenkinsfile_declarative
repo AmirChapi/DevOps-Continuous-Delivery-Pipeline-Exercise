@@ -65,7 +65,7 @@ pipeline {
                 script {
                     def status = currentBuild.currentResult
 
-                    emailext(
+                    mail(
                         to: 'amirmalka26@gmail.com',
                         subject: "Job ${env.JOB_NAME} #${env.BUILD_NUMBER} - ${status}",
                         body: """\
