@@ -1,84 +1,61 @@
 pipeline {
-    // 2. הגדרת Agent ל-Pipeline כולו: משתמש באימג' שנבנה
-    agent {
-        docker {
-            image 'zip-job-test'
-            label 'zip-job-docker' // עונה על הדרישה ל-label
-            args '--privileged -u 0:0' // עונה על הדרישה ל-privileged mode
-        }
-    }
+    agent any
 
     environment {
-        VERSION      = "1.2.0"
-        // 1. תיקון Artifactory URL לפי דרישת התרגיל
-        ART_URL      = "http://artifactory-tlv:8081/artifactory"
-        ART_REPO     = "binary-storage/${VERSION}"
+        // גרסת האפליקציה שתיכנס גם בשם ה-ZIP וגם בנתיב ב-Artifactory
+        VERSION         = '1.2.0'
+        // ה-URL של ה-Artifactory (עובדים מול 8082 – ה-Router)
+        ARTIFACTORY_URL = 'http://localhost:8082/artifactory'
     }
 
     stages {
 
-        // 3. שלב חדש: בניית האימג'
-        stage('Docker Image Build') {
-            // שלב זה רץ על ה-Jenkins Agent הראשי, לא בתוך הקונטיינר החדש
-            agent any
+        stage('Build in Docker') {
             steps {
-                echo "Building zip-job-test Docker image..."
-                // בהנחה שה-Agent רץ על Linux/WSL. אם זה Windows, החלף ל-bat
-                sh 'docker build -t zip-job-test .'
-            }
-        }
+                echo "Running zip_job.py inside Docker image 'zip-job-test' with VERSION=${env.VERSION}"
 
-        // 4. שלב Build: כעת הפקודות רצות בתוך הקונטיינר zip-job-test
-        stage('Build & Run Python') {
-            steps {
-                echo "Running zip_job.py inside Docker Agent with VERSION=${env.VERSION}"
+                // מריצים את ה-Docker image שבנית (zip-job-test) ומפעילים את ה-Python
+                bat """
+                    echo Current workspace: %CD%
 
-                // מריץ ישירות את קוד הפייתון, כיוון שהאימג' הוא כעת ה-Agent
-                sh 'python3 /tmp/zip_job.py'
-                sh 'ls -l'
-
-                // הערה: שימוש ב-sh במקום bat עדיף כאשר ה-Agent הוא Docker מבוסס לינוקס (כמו Ubuntu)
+                    docker run --rm ^
+                      -e VERSION=${env.VERSION} ^
+                      -v "%CD%":/workspace ^
+                      -w /workspace ^
+                      zip-job-test bash -c "python3 /tmp/zip_job.py && ls -l"
+                """
             }
         }
 
         stage('Publish to Artifactory') {
-            // ה-Agent נשאר אותו דבר (zip-job-test)
             steps {
-                echo "Uploading zip files from workspace to Artifactory..."
+                echo 'Uploading zip files from workspace to Artifactory...'
 
-                withCredentials([
-                    usernamePassword(
-                        credentialsId: 'artifactory-super-user',
-                        usernameVariable: 'ART_USER',
-                        passwordVariable: 'ART_PASS'
-                    )
-                ]) {
-                    // הפקודה נשארה בפורמט BAT כדי להיות תואמת לסביבת Windows שבה Jenkins רץ
-                    bat '''
+                // מושכים את הסיסמה מה-Credentials ב-Jenkins (ID: artifactory-super-user)
+                withCredentials([string(credentialsId: 'artifactory-super-user', variable: 'ART_PASS')]) {
+                    bat """
                         echo Listing zip files in workspace:
                         dir *.zip
 
                         for %%f in (*.zip) do (
-                            echo Uploading %%f
-                            curl -v -u "%ART_USER%:%ART_PASS%" -T "%%f" "%ART_URL%/%ART_REPO%/%%f"
+                          echo Uploading %%f
+                          curl --fail -v -u "super-user:%ART_PASS%" -T "%%f" "${ARTIFACTORY_URL}/binary-storage/${VERSION}/%%f"
                         )
 
                         echo Finished uploading all zip files.
-                    '''
+                    """
                 }
             }
         }
 
         stage('Cleanup') {
-            // עונה על דרישת התרגיל (סעיף 3ה)
             steps {
-                echo "Cleaning workspace..."
+                echo 'Cleaning workspace...'
                 cleanWs()
             }
         }
 
         stage('Report') {
-            // עונה על דרישת התרגיל (סעיף 3ד)
             steps {
                 script {
                     def status = currentBuild.currentResult
@@ -86,12 +63,11 @@ pipeline {
                     mail(
                         to: 'amirmalka26@gmail.com',
                         subject: "Job ${env.JOB_NAME} #${env.BUILD_NUMBER} - ${status}",
-                        body: """\
-Job name: ${env.JOB_NAME}
+                        body: """Job name: ${env.JOB_NAME}
 Build number: ${env.BUILD_NUMBER}
 Result: ${status}
 
-See details at: ${env.BUILD_URL}
+Build URL: ${env.BUILD_URL}
 """
                     )
                 }
