@@ -1,26 +1,28 @@
 pipeline {
     agent any
 
+    /* משתני סביבה גלובליים */
     environment {
-        // גרסת האפליקציה שתיכנס גם בשם ה-ZIP וגם בנתיב ב-Artifactory
-        VERSION         = '1.2.0'
-        // ה-URL של ה-Artifactory (עובדים מול 8082 – ה-Router)
-        ARTIFACTORY_URL = 'http://localhost:8082/artifactory'
+        VERSION         = '1.2.0'                                  // אותו VERSION שיש ב-Dockerfile וב-zip_job.py
+        ARTIFACTORY_URL = 'http://localhost:8081/artifactory'      // Artifactory רץ על 8081
     }
 
     stages {
+        /* קלאון לקוד – בג׳וב מסוג "Pipeline script from SCM"
+           Jenkins יוצר לבד את ה-stage "Declarative: Checkout SCM"
+         */
 
         stage('Build in Docker') {
             steps {
                 echo "Running zip_job.py inside Docker image 'zip-job-test' with VERSION=${env.VERSION}"
 
-                // מריצים את ה-Docker image שבנית (zip-job-test) ומפעילים את ה-Python
+                // נריץ את הקונטיינר ב-Windows (bat = CMD)
                 bat """
-                    echo Current workspace: %CD%
+                    echo Current workspace: %WORKSPACE%
 
                     docker run --rm ^
-                      -e VERSION=${env.VERSION} ^
-                      -v "%CD%":/workspace ^
+                      -e VERSION=${VERSION} ^
+                      -v "%WORKSPACE%":/workspace ^
                       -w /workspace ^
                       zip-job-test bash -c "python3 /tmp/zip_job.py && ls -l"
                 """
@@ -29,17 +31,23 @@ pipeline {
 
         stage('Publish to Artifactory') {
             steps {
-                echo 'Uploading zip files from workspace to Artifactory...'
+                echo "Uploading zip files from workspace to Artifactory..."
 
-                // מושכים את הסיסמה מה-Credentials ב-Jenkins (ID: artifactory-super-user)
-                withCredentials([string(credentialsId: 'artifactory-super-user', variable: 'ART_PASS')]) {
+                // משתמש בסיסמה מהקרדנצ׳לס Jenkins (Username with password)
+                withCredentials([usernamePassword(
+                        credentialsId: 'artifactory-super-user',
+                        usernameVariable: 'ART_USER',
+                        passwordVariable: 'ART_PASS'
+                )]) {
                     bat """
                         echo Listing zip files in workspace:
                         dir *.zip
 
                         for %%f in (*.zip) do (
                           echo Uploading %%f
-                          curl --fail -v -u "super-user:%ART_PASS%" -T "%%f" "${ARTIFACTORY_URL}/binary-storage/${VERSION}/%%f"
+                          curl -v -u "%ART_USER%:%ART_PASS%" ^
+                            -T "%%f" ^
+                            "${ARTIFACTORY_URL}/binary-storage/${VERSION}/%%f"
                         )
 
                         echo Finished uploading all zip files.
@@ -50,7 +58,7 @@ pipeline {
 
         stage('Cleanup') {
             steps {
-                echo 'Cleaning workspace...'
+                echo "Cleaning workspace..."
                 cleanWs()
             }
         }
@@ -63,11 +71,12 @@ pipeline {
                     mail(
                         to: 'amirmalka26@gmail.com',
                         subject: "Job ${env.JOB_NAME} #${env.BUILD_NUMBER} - ${status}",
-                        body: """Job name: ${env.JOB_NAME}
-Build number: ${env.BUILD_NUMBER}
-Result: ${status}
+                        body: """\
+Job name:   ${env.JOB_NAME}
+Build #:    ${env.BUILD_NUMBER}
+Result:     ${status}
 
-Build URL: ${env.BUILD_URL}
+Console log: ${env.BUILD_URL}console
 """
                     )
                 }
