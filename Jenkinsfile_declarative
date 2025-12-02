@@ -1,81 +1,66 @@
 pipeline {
-    agent any
-
+    
     environment {
-        VERSION      = "1.2.0"
-        ART_URL      = "http://localhost:8081/artifactory"
-        ART_REPO     = "binary-storage/${VERSION}"
+        VERSION = '1.2.0'
+        ART_URL = 'http://artifactory-tlv:8081/artifactory'
+        ART_REPO = "binary-storage/${env.VERSION}"
+        ART_CRED_ID = 'artifactory-super-user'
     }
 
+    agent {
+        docker {
+            args '--privileged -u 0:0' 
+        }
+    }
+    
+    // קובע מה קורה לאחר שה-Pipeline מסתיים (בין אם הצליח או נכשל)
+    post {
+        always {
+            cleanWs()
+        }
+        success {
+            echo "Pipeline finished successfully. All ZIPs uploaded to Artifactory!"
+            mail(
+                to: 'amirmalka26@gmail.com',
+                subject: "Job ${env.JOB_NAME} - SUCCESS",
+                body: "Pipeline completed successfully. Check artifacts at Artifactory-TLV."
+            )
+        }
+        failure {
+            echo "Pipeline FAILED. Check console output for errors."
+        }
+    }
+
+    // הגדרת שלבים (Stages)
     stages {
-
-        stage('Build in Docker') {
+        
+        stage('Build & Run Python') {
             steps {
-                echo "Running zip_job.py inside Docker image 'zip-job-test' with VERSION=${env.VERSION}"
-
-                bat '''
-                    echo Current workspace: %CD%
-                '''
-
-                bat """
-                    docker run --rm ^
-                      -e VERSION=${env.VERSION} ^
-                      -v \"%CD%\":/workspace ^
-                      -w /workspace ^
-                      zip-job-test bash -c \"python3 /tmp/zip_job.py && ls -l\"
-                """
+                echo "Running zip_job.py inside Docker image '${agent.image}' with VERSION=${env.VERSION}"
+                
+                sh 'python3 /tmp/zip_job.py'
+                
+                sh 'ls -l *.zip'
             }
         }
-
+        
         stage('Publish to Artifactory') {
             steps {
-                echo "Uploading zip files from workspace to Artifactory..."
-
+                echo "Uploading zip files to Artifactory URL: ${env.ART_URL}/${env.ART_REPO}"
+                
                 withCredentials([
                     usernamePassword(
-                        credentialsId: 'artifactory-super-user',
+                        credentialsId: env.ART_CRED_ID,
                         usernameVariable: 'ART_USER',
                         passwordVariable: 'ART_PASS'
                     )
                 ]) {
-                    bat '''
-                        echo Listing zip files in workspace:
-                        dir *.zip
-
-                        for %%f in (*.zip) do (
-                            echo Uploading %%f
-                            curl -v -u "%ART_USER%:%ART_PASS%" -T "%%f" "%ART_URL%/%ART_REPO%/%%f"
-                        )
-
-                        echo Finished uploading all zip files.
-                    '''
-                }
-            }
-        }
-
-        stage('Cleanup') {
-            steps {
-                echo "Cleaning workspace..."
-                cleanWs()
-            }
-        }
-
-        stage('Report') {
-            steps {
-                script {
-                    def status = currentBuild.currentResult
-
-                    mail(
-                        to: 'amirmalka26@gmail.com',
-                        subject: "Job ${env.JOB_NAME} #${env.BUILD_NUMBER} - ${status}",
-                        body: """\
-Job name: ${env.JOB_NAME}
-Build number: ${env.BUILD_NUMBER}
-Result: ${status}
-
-See details at: ${env.BUILD_URL}
-"""
-                    )
+                    sh """
+                        for f in \$(ls *.zip); do
+                            echo Uploading \$f...
+                            curl -v -u "${ART_USER}:${ART_PASS}" -T "\$f" "${env.ART_URL}/${env.ART_REPO}/\$f"
+                        done
+                    """
                 }
             }
         }

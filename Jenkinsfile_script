@@ -1,22 +1,18 @@
 pipeline {
     agent any
 
-    /* משתני סביבה גלובליים */
     environment {
-        VERSION         = '1.2.0'                                  // אותו VERSION שיש ב-Dockerfile וב-zip_job.py
-        ARTIFACTORY_URL = 'http://localhost:8081/artifactory'      // Artifactory רץ על 8081
+        VERSION         = '1.2.0'
+        ARTIFACTORY_URL = 'http://localhost:8081/artifactory'
     }
 
     stages {
-        /* קלאון לקוד – בג׳וב מסוג "Pipeline script from SCM"
-           Jenkins יוצר לבד את ה-stage "Declarative: Checkout SCM"
-         */
+
 
         stage('Build in Docker') {
             steps {
                 echo "Running zip_job.py inside Docker image 'zip-job-test' with VERSION=${env.VERSION}"
 
-                // נריץ את הקונטיינר ב-Windows (bat = CMD)
                 bat """
                     echo Current workspace: %WORKSPACE%
 
@@ -33,7 +29,6 @@ pipeline {
             steps {
                 echo "Uploading zip files from workspace to Artifactory..."
 
-                // משתמש בסיסמה מהקרדנצ׳לס Jenkins (Username with password)
                 withCredentials([usernamePassword(
                         credentialsId: 'artifactory-super-user',
                         usernameVariable: 'ART_USER',
