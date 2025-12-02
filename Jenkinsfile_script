@@ -1,0 +1,101 @@
+pipeline {
+    // 2. הגדרת Agent ל-Pipeline כולו: משתמש באימג' שנבנה
+    agent {
+        docker {
+            image 'zip-job-test'
+            label 'zip-job-docker' // עונה על הדרישה ל-label
+            args '--privileged -u 0:0' // עונה על הדרישה ל-privileged mode
+        }
+    }
+
+    environment {
+        VERSION      = "1.2.0"
+        // 1. תיקון Artifactory URL לפי דרישת התרגיל
+        ART_URL      = "http://artifactory-tlv:8081/artifactory"
+        ART_REPO     = "binary-storage/${VERSION}"
+    }
+
+    stages {
+
+        // 3. שלב חדש: בניית האימג'
+        stage('Docker Image Build') {
+            // שלב זה רץ על ה-Jenkins Agent הראשי, לא בתוך הקונטיינר החדש
+            agent any
+            steps {
+                echo "Building zip-job-test Docker image..."
+                // בהנחה שה-Agent רץ על Linux/WSL. אם זה Windows, החלף ל-bat
+                sh 'docker build -t zip-job-test .'
+            }
+        }
+
+        // 4. שלב Build: כעת הפקודות רצות בתוך הקונטיינר zip-job-test
+        stage('Build & Run Python') {
+            steps {
+                echo "Running zip_job.py inside Docker Agent with VERSION=${env.VERSION}"
+
+                // מריץ ישירות את קוד הפייתון, כיוון שהאימג' הוא כעת ה-Agent
+                sh 'python3 /tmp/zip_job.py'
+                sh 'ls -l'
+
+                // הערה: שימוש ב-sh במקום bat עדיף כאשר ה-Agent הוא Docker מבוסס לינוקס (כמו Ubuntu)
+            }
+        }
+
+        stage('Publish to Artifactory') {
+            // ה-Agent נשאר אותו דבר (zip-job-test)
+            steps {
+                echo "Uploading zip files from workspace to Artifactory..."
+
+                withCredentials([
+                    usernamePassword(
+                        credentialsId: 'artifactory-super-user',
+                        usernameVariable: 'ART_USER',
+                        passwordVariable: 'ART_PASS'
+                    )
+                ]) {
+                    // הפקודה נשארה בפורמט BAT כדי להיות תואמת לסביבת Windows שבה Jenkins רץ
+                    bat '''
+                        echo Listing zip files in workspace:
+                        dir *.zip
+
+                        for %%f in (*.zip) do (
+                            echo Uploading %%f
+                            curl -v -u "%ART_USER%:%ART_PASS%" -T "%%f" "%ART_URL%/%ART_REPO%/%%f"
+                        )
+
+                        echo Finished uploading all zip files.
+                    '''
+                }
+            }
+        }
+
+        stage('Cleanup') {
+            // עונה על דרישת התרגיל (סעיף 3ה)
+            steps {
+                echo "Cleaning workspace..."
+                cleanWs()
+            }
+        }
+
+        stage('Report') {
+            // עונה על דרישת התרגיל (סעיף 3ד)
+            steps {
+                script {
+                    def status = currentBuild.currentResult
+
+                    mail(
+                        to: 'amirmalka26@gmail.com',
+                        subject: "Job ${env.JOB_NAME} #${env.BUILD_NUMBER} - ${status}",
+                        body: """\
+Job name: ${env.JOB_NAME}
+Build number: ${env.BUILD_NUMBER}
+Result: ${status}
+
+See details at: ${env.BUILD_URL}
+"""
+                    )
+                }
+            }
+        }
+    }
+}
