@@ -47,12 +47,12 @@ node('any') {
             server.publishBuildInfo buildInfo
         }
     } // סגירת בלוק Docker Agent
-    
+
     // --- שלב 3: Cleanup ---
     stage('Cleanup') {
         cleanWs()
     }
-    
+
     // --- שלב 4: Report ---
     stage('Report') {
         def status = currentBuild.result
