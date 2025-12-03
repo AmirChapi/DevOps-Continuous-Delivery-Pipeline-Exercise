@@ -2,7 +2,7 @@
 def dockerImage = 'zip-job-image'
 def version = '1.2.0'
 def artRepo = "binary-storage/${version}/"
-def artifactoryServerId = "Artifactory-TLV-Server"
+def artifactoryServerId = "artifactory-tlv"
 
 node('built-in') {
 
