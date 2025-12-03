@@ -3,7 +3,7 @@ pipeline {
     // הגדרת משתני סביבה גלובליים
     environment {
         VERSION = '1.2.0'
-        // פתרון בעיית Windows/Docker
+        // 1. תיקון תקשורת Docker ב-Windows (Named Pipe)
         DOCKER_HOST = 'npipe:////./pipe/docker_engine'
 
         // הגדרות Artifactory
@@ -11,19 +11,19 @@ pipeline {
         ART_REPO_KEY = 'binary-storage'
     }
 
-    // Agent מתוקן: ה-Working Directory מוכנס כערך קבוע
+    // Agent מתוקן: הסרת ה-args הכופים כדי למנוע התנגשות נתיבים
     agent {
         docker {
             image 'zip-job-test'
-            // הנתיב /usr/src/app הוכנס ישירות כערך קבוע לפתרון שגיאת המשתנה
-            args "--privileged -u 0:0 -w /usr/src/app -v \${PWD}:/usr/src/app"
+            // 2. הסרת ארגומנטים של נתיבים/Working Directory כדי למנוע כפילות עם ה-C:\
+            args "--privileged -u 0:0"
         }
     }
 
     // Post actions (Email וניקוי Workspace)
     post {
         always {
-            // הוספת node('built-in') כדי לאפשר ל-cleanWs לרוץ
+            // 3. תיקון cleanWs: עוטף את הניקוי בבלוק node כדי לספק Node Context
             node('built-in') {
                 cleanWs()
                 echo "Pipeline finished cleanup."
@@ -47,9 +47,12 @@ pipeline {
         stage('Build & Run Python') {
             steps {
                 echo "Running zip_job.py inside Docker image '${agent.image}'"
-                // הפעלת הסקריפט, תוך שימוש בנתיב הלינוקסי הקבוע שהגדרנו למעלה
-                sh 'python3 /usr/src/app/zip_job.py'
-                sh 'ls -l /usr/src/app/*.zip'
+
+                // **תיקון קריטי**: משתמש בנתיב /tmp/zip_job.py כפי שהוגדר ב-Dockerfile שלך
+                sh 'python3 /tmp/zip_job.py'
+
+                // קבצי ה-.zip נוצרים ב-Workspace הממופה (הנתיב הלינוקסי של C:\...)
+                sh 'ls -l *.zip'
             }
         }
 
@@ -66,6 +69,7 @@ pipeline {
                         spec: """{
                             "files": [
                                 {
+                                    // הקובץ .zip נמצא ב-Workspace (שמוצמד לקונטיינר)
                                     "pattern": "*.zip",
                                     "target": "${ART_REPO_KEY}/${env.VERSION}/"
                                 }
