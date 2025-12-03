@@ -1,20 +1,17 @@
+// הגדרת משתנים גלובליים
 def dockerImage = 'zip-job-test'
 def version = '1.2.0'
-def artUrl = "https://artifactory-tlv:8081/artifactory" // 1.2: שינוי ל-HTTPS
-def artRepo = "binary-storage/${version}"
-def artCredsId = 'artifactory-super-user'
+def artifactoryServerId = 'Artifactory-TLV-Server' // מזהה השרת מתוך הגדרות Jenkins
 
-// 1: הפורמט הנכון - שימוש ב-node, שהוא הבסיס
-node('zip-job-docker') { // נדרש שה-Jenkins Agent יהיה מסומן ב-label זה
-    
-    // הגדרת משתני סביבה ספציפיים ל-Scripted
+// 1: שימוש בפורמט Scripted נכון: node ו-Groovy DSL
+node('master') {
+
+    // הגדרת משתני סביבה בתוך ה-Scripted
     env.VERSION = version
-    env.ART_URL = artUrl
-    env.ART_REPO = artRepo
 
-    // 1.1: שימוש ב-docker.image().inside כ-Agent
+    // 1.1: שימוש ב-Docker API של Jenkins כ-Agent
     docker.image(dockerImage).withRun('--privileged -u 0:0') { container ->
-        
+
         // --- שלב 1: Build & Run Python ---
         stage('Build & Run Python') {
             echo "Running zip_job.py inside Docker image '${dockerImage}'"
@@ -22,25 +19,34 @@ node('zip-job-docker') { // נדרש שה-Jenkins Agent יהיה מסומן ב-l
             sh 'ls -l *.zip'
         }
 
-        // --- שלב 2: Publish to Artifactory (שימוש ב-sh במקום bat) ---
-        stage('Publish to Artifactory') {
-            withCredentials([
-                usernamePassword(
-                    credentialsId: artCredsId,
-                    usernameVariable: 'ART_USER',
-                    passwordVariable: 'ART_PASS'
-                )
-            ]) {
-                // שימוש ב-sh וב-curl לפרסום
-                sh """
-                    for f in \$(ls *.zip); do
-                        echo Uploading \$f
-                        curl -v --insecure -u "${ART_USER}:${ART_PASS}" -T "\$f" "${env.ART_URL}/${env.ART_REPO}/\$f"
-                    done
-                """
-            }
+        // --- שלב 2: Publish to Artifactory (Plugin) ---
+        stage('Publish to Artifactory (Plugin)') {
+
+            // 1. קבלת מופע השרת
+            def server = Artifactory.server artifactoryServerId
+
+            // 2. יצירת אובייקט Build Info
+            def buildInfo = Artifactory.newBuildInfo()
+            buildInfo.name = env.JOB_NAME
+            buildInfo.number = env.BUILD_NUMBER
+
+            // 3. העלאת קבצים באמצעות File Specs
+            server.upload (
+                spec: """{
+                    "files": [
+                        {
+                            "pattern": "*.zip",
+                            "target": "binary-storage/${version}/"
+                        }
+                    ]
+                }""",
+                buildInfo: buildInfo
+            )
+
+            // 4. פרסום המטא-דאטה
+            server.publishBuildInfo buildInfo
         }
-    } // סגירת בלוק Docker Run
+    } // סגירת בלוק Docker Agent
     
     // --- שלב 3: Cleanup ---
     stage('Cleanup') {
