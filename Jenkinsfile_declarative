@@ -3,34 +3,33 @@ pipeline {
     // הגדרת משתני סביבה גלובליים
     environment {
         VERSION = '1.2.0'
-        // פתרון בעיית Windows/Docker: מאפשר ל-Jenkins לדבר עם הדאמון
-        DOCKER_HOST = 'npipe:////./pipe/docker_engine' // שימוש ב-Named Pipe
+        // פתרון בעיית Windows/Docker
+        DOCKER_HOST = 'npipe:////./pipe/docker_engine'
 
         // הגדרות Artifactory
-        ARTIFACTORY_SERVER_ID = 'Artifactory-TLV-Server' // מזהה השרת שהגדרת ב-Manage Jenkins -> System
+        ARTIFACTORY_SERVER_ID = 'Artifactory-TLV-Server'
         ART_REPO_KEY = 'binary-storage'
-
-        // הגדרת נתיב העבודה בתוך הקונטיינר (Linux Path)
-        CONTAINER_WORKDIR = '/usr/src/app'
     }
 
-    // Agent מתוקן - משתמש באימג' שיצרת
+    // Agent מתוקן: ה-Working Directory מוכנס כערך קבוע
     agent {
         docker {
             image 'zip-job-test'
-            args "--privileged -u 0:0 -w ${CONTAINER_WORKDIR} -v \${PWD}:${CONTAINER_WORKDIR}"
-            // -w /usr/src/app: מכריח את הקונטיינר להשתמש בנתיב לינוקסי כ-Working Directory
-            // -v ${PWD}:/usr/src/app: מיפוי נתיב Windows (המומר ע"י Docker) לנתיב הלינוקסי הנכון
+            // הנתיב /usr/src/app הוכנס ישירות כערך קבוע לפתרון שגיאת המשתנה
+            args "--privileged -u 0:0 -w /usr/src/app -v \${PWD}:/usr/src/app"
         }
     }
 
     // Post actions (Email וניקוי Workspace)
     post {
         always {
-            cleanWs()
+            // הוספת node('built-in') כדי לאפשר ל-cleanWs לרוץ
+            node('built-in') {
+                cleanWs()
+                echo "Pipeline finished cleanup."
+            }
         }
         success {
-            echo "Pipeline finished successfully. Artifacts published."
             mail(
                 to: 'amirmalka26@gmail00.com',
                 subject: "Job ${env.JOB_NAME} - SUCCESS",
@@ -48,28 +47,22 @@ pipeline {
         stage('Build & Run Python') {
             steps {
                 echo "Running zip_job.py inside Docker image '${agent.image}'"
-                // הפעלת הסקריפט, תוך שימוש בנתיב הלינוקסי החדש בתוך הקונטיינר
-                sh "python3 ${CONTAINER_WORKDIR}/zip_job.py"
-                sh "ls -l ${CONTAINER_WORKDIR}/*.zip"
+                // הפעלת הסקריפט, תוך שימוש בנתיב הלינוקסי הקבוע שהגדרנו למעלה
+                sh 'python3 /usr/src/app/zip_job.py'
+                sh 'ls -l /usr/src/app/*.zip'
             }
         }
 
-        // שלב 2: Publish ל-Artifactory באמצעות פלאגין (מתקן הערה 2)
+        // שלב 2: Publish ל-Artifactory באמצעות פלאגין
         stage('Publish to Artifactory (Plugin)') {
             steps {
-                script { // נדרש בלוק script כדי להשתמש ב-Groovy DSL של הפלאגין
-
-                    // 1. קבלת מופע השרת מתוך הגדרות Jenkins
+                script {
                     def server = Artifactory.server ARTIFACTORY_SERVER_ID
-
-                    // 2. יצירת אובייקט Build Info (Metadata)
                     def buildInfo = Artifactory.newBuildInfo()
                     buildInfo.name = env.JOB_NAME
                     buildInfo.number = env.BUILD_NUMBER
 
-                    // 3. העלאת קבצים באמצעות File Specs
                     server.upload (
-                        // File Spec: כל קובץ .zip ב-Workspace (שכעת ממופה ל-CONTAINER_WORKDIR)
                         spec: """{
                             "files": [
                                 {
@@ -81,7 +74,6 @@ pipeline {
                         buildInfo: buildInfo
                     )
 
-                    // 4. פרסום המטא-דאטה של ה-Build ל-Artifactory
                     server.publishBuildInfo buildInfo
                 }
             }
