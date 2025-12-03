@@ -1,0 +1,59 @@
+def dockerImage = 'zip-job-test'
+def version = '1.2.0'
+def artUrl = "https://artifactory-tlv:8081/artifactory" // 1.2: שינוי ל-HTTPS
+def artRepo = "binary-storage/${version}"
+def artCredsId = 'artifactory-super-user'
+
+// 1: הפורמט הנכון - שימוש ב-node, שהוא הבסיס
+node('zip-job-docker') { // נדרש שה-Jenkins Agent יהיה מסומן ב-label זה
+    
+    // הגדרת משתני סביבה ספציפיים ל-Scripted
+    env.VERSION = version
+    env.ART_URL = artUrl
+    env.ART_REPO = artRepo
+
+    // 1.1: שימוש ב-docker.image().inside כ-Agent
+    docker.image(dockerImage).withRun('--privileged -u 0:0') { container ->
+        
+        // --- שלב 1: Build & Run Python ---
+        stage('Build & Run Python') {
+            echo "Running zip_job.py inside Docker image '${dockerImage}'"
+            sh 'python3 /tmp/zip_job.py'
+            sh 'ls -l *.zip'
+        }
+
+        // --- שלב 2: Publish to Artifactory (שימוש ב-sh במקום bat) ---
+        stage('Publish to Artifactory') {
+            withCredentials([
+                usernamePassword(
+                    credentialsId: artCredsId,
+                    usernameVariable: 'ART_USER',
+                    passwordVariable: 'ART_PASS'
+                )
+            ]) {
+                // שימוש ב-sh וב-curl לפרסום
+                sh """
+                    for f in \$(ls *.zip); do
+                        echo Uploading \$f
+                        curl -v --insecure -u "${ART_USER}:${ART_PASS}" -T "\$f" "${env.ART_URL}/${env.ART_REPO}/\$f"
+                    done
+                """
+            }
+        }
+    } // סגירת בלוק Docker Run
+    
+    // --- שלב 3: Cleanup ---
+    stage('Cleanup') {
+        cleanWs()
+    }
+    
+    // --- שלב 4: Report ---
+    stage('Report') {
+        def status = currentBuild.result
+        mail(
+            to: 'amirmalka26@gmail00.com',
+            subject: "Job ${env.JOB_NAME} #${env.BUILD_NUMBER} - ${status}",
+            body: "Result: ${status}\nConsole log: ${env.BUILD_URL}console"
+        )
+    }
+}
