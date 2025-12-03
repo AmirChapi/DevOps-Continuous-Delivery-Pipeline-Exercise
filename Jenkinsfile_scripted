@@ -1,5 +1,5 @@
 // Global variables
-def dockerImage = 'zip-job-image'
+def dockerImage = 'zip-job-test'
 def version = '1.2.0'
 def artRepo = "binary-storage/${version}/"
 def artifactoryServerId = "artifactory-tlv"
