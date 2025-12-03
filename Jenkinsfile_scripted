@@ -4,7 +4,7 @@ def version = '1.2.0'
 def artifactoryServerId = 'Artifactory-TLV-Server' // מזהה השרת מתוך הגדרות Jenkins
 
 // 1: שימוש בפורמט Scripted נכון: node ו-Groovy DSL
-node('master') {
+node('any') {
 
     // הגדרת משתני סביבה בתוך ה-Scripted
     env.VERSION = version
