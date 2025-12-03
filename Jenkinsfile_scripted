@@ -1,17 +1,22 @@
-         // הגדרת משתנים גלובליים
+// משתנים גלובליים
 def dockerImage = 'zip-job-test'
 def version = '1.2.0'
-def artifactoryServerId = 'Artifactory-TLV-Server'
+def artifactoryServerId = 'Artifactory-TLV-Server'   // לוודא תואם להגדרת השרת ב-Jenkins
 def artRepoKey = 'binary-storage'
 
-// 1: שימוש בפורמט Scripted נכון: node ו-Groovy DSL
-node('built-in') { // שימוש בתווית built-in, או ב-'any' אם הוגדרה, או ב-'zip-job-docker'
+node('built-in') {
 
-    // הגדרת משתני סביבה בתוך ה-Scripted, כולל תיקון לבעיות Docker ב-Windows
     env.VERSION = version
-    env.DOCKER_HOST = 'tcp://localhost:2375' // פתרון לבעיית Windows/Docker
 
-    // 1.1: שימוש ב-docker.image().inside כ-Agent
+    // --- שלב 0: Build Docker Image מה-Dockerfile ---
+    stage('Build Docker Image') {
+        echo "Building Docker image '${dockerImage}' from Dockerfile..."
+        sh """
+            docker build -t ${dockerImage} .
+        """
+    }
+
+    // שימוש ב-docker.image().inside כ"agent"
     docker.image(dockerImage).inside {
 
         // --- שלב 1: Build & Run Python ---
@@ -24,31 +29,27 @@ node('built-in') { // שימוש בתווית built-in, או ב-'any' אם הו�
         // --- שלב 2: Publish to Artifactory (Plugin) ---
         stage('Publish to Artifactory (Plugin)') {
 
-            // 1. קבלת מופע השרת
-            def server = Artifactory.server artifactoryServerId
+            def server = Artifactory.server(artifactoryServerId)
 
-            // 2. יצירת אובייקט Build Info
             def buildInfo = Artifactory.newBuildInfo()
             buildInfo.name = env.JOB_NAME
             buildInfo.number = env.BUILD_NUMBER
 
-            // 3. העלאת קבצים באמצעות File Specs
-            server.upload (
+            server.upload(
                 spec: """{
                     "files": [
                         {
                             "pattern": "*.zip",
-                            "target": "${artRepoKey}/${version}/" // נתיב היעד
+                            "target": "${artRepoKey}/${version}/"
                         }
                     ]
                 }""",
                 buildInfo: buildInfo
             )
 
-            // 4. פרסום המטא-דאטה
-            server.publishBuildInfo buildInfo
+            server.publishBuildInfo(buildInfo)
         }
-    } // סגירת בלוק Docker Agent
+    }
 
     // --- שלב 3: Cleanup ---
     stage('Cleanup') {
@@ -57,9 +58,9 @@ node('built-in') { // שימוש בתווית built-in, או ב-'any' אם הו�
 
     // --- שלב 4: Report ---
     stage('Report') {
-        def status = currentBuild.result
+        def status = currentBuild.currentResult
         mail(
-            to: 'amirmalka26@gmail00.com',
+            to: 'amirmalka26@gmail.com',
             subject: "Job ${env.JOB_NAME} #${env.BUILD_NUMBER} - ${status}",
             body: "Result: ${status}\nConsole log: ${env.BUILD_URL}console"
         )
