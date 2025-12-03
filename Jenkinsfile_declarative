@@ -3,27 +3,27 @@ pipeline {
     // הגדרת משתני סביבה גלובליים
     environment {
         VERSION = '1.2.0'
-        // 1. תיקון תקשורת Docker ב-Windows (Named Pipe)
         DOCKER_HOST = 'npipe:////./pipe/docker_engine'
 
-        // הגדרות Artifactory
         ARTIFACTORY_SERVER_ID = 'Artifactory-TLV-Server'
         ART_REPO_KEY = 'binary-storage'
+
+        // הגדרת שם האימג' לשימוש ב-stage
+        IMAGE_NAME = 'zip-job-test'
+
+        // נתיב ה-Workspace של Jenkins בתוך Windows (ה-PWD)
+        WINDOWS_WORKSPACE = "${env.WORKSPACE}"
+
+        // נתיב וירטואלי שנשתמש בו בתוך הקונטיינר (Linux path)
+        CONTAINER_MOUNT_PATH = '/app'
     }
 
-    // Agent מתוקן: הסרת ה-args הכופים כדי למנוע התנגשות נתיבים
-    agent {
-        docker {
-            image 'zip-job-test'
-            // 2. הסרת ארגומנטים של נתיבים/Working Directory כדי למנוע כפילות עם ה-C:\
-            args "--privileged -u 0:0"
-        }
-    }
+    // Agent none: מכבה את הטיפול האוטומטי של Docker Workflow בנתיבים
+    agent none
 
     // Post actions (Email וניקוי Workspace)
     post {
         always {
-            // 3. תיקון cleanWs: עוטף את הניקוי בבלוק node כדי לספק Node Context
             node('built-in') {
                 cleanWs()
                 echo "Pipeline finished cleanup."
@@ -43,21 +43,40 @@ pipeline {
 
     stages {
 
-        // שלב 1: Build & Run Python
+        // שלב 1: Build & Run Python (הרצה ידנית של Docker)
         stage('Build & Run Python') {
+            agent {
+                // חייב להיות agent כלשהו, נשתמש ב-built-in
+                node('built-in')
+            }
             steps {
-                echo "Running zip_job.py inside Docker image '${agent.image}'"
+                script {
+                    echo "Running zip_job.py manually using docker run"
 
-                // **תיקון קריטי**: משתמש בנתיב /tmp/zip_job.py כפי שהוגדר ב-Dockerfile שלך
-                sh 'python3 /tmp/zip_job.py'
+                    // הפעלת docker run עם נתיבי Volume Mount מפורשים
+                    // -w /app: נתיב העבודה בתוך הקונטיינר
+                    // -v C:/ProgramData/...:/app: מיפוי ה-Workspace של Windows לנתיב הלינוקסי /app
 
-                // קבצי ה-.zip נוצרים ב-Workspace הממופה (הנתיב הלינוקסי של C:\...)
-                sh 'ls -l *.zip'
+                    // שימו לב: אנו משתמשים ב-${WINDOWS_WORKSPACE} כדי ש-bat/shell ידעו שזה נתיב Windows.
+                    bat """
+                        docker run --rm ^
+                            -w ${CONTAINER_MOUNT_PATH} ^
+                            -v "${WINDOWS_WORKSPACE}":${CONTAINER_MOUNT_PATH} ^
+                            ${IMAGE_NAME} ^
+                            python3 /tmp/zip_job.py
+                    """
+
+                    // בדיקה שהקבצים נוצרו ב-Workspace של Windows
+                    bat "dir *.zip"
+                }
             }
         }
 
-        // שלב 2: Publish ל-Artifactory באמצעות פלאגין
+        // שלב 2: Publish ל-Artifactory (נותר ללא שינוי, משתמש בקבצים מה-Workspace של Windows)
         stage('Publish to Artifactory (Plugin)') {
+            agent {
+                node('built-in')
+            }
             steps {
                 script {
                     def server = Artifactory.server ARTIFACTORY_SERVER_ID
@@ -69,7 +88,6 @@ pipeline {
                         spec: """{
                             "files": [
                                 {
-                                    // הקובץ .zip נמצא ב-Workspace (שמוצמד לקונטיינר)
                                     "pattern": "*.zip",
                                     "target": "${ART_REPO_KEY}/${env.VERSION}/"
                                 }
