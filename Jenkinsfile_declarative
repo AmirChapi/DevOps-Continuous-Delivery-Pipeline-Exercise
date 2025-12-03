@@ -1,32 +1,32 @@
 pipeline {
 
-    // 1.2: שינוי ל-HTTPS כנדרש (בבדיקות תצטרך לעבוד עם Artifactory שתומך ב-HTTPS)
+    // הגדרת משתני סביבה גלובליים
     environment {
         VERSION = '1.2.0'
-        ART_URL = 'https://artifactory-tlv:8081/artifactory' // שינוי ל-HTTPS
-        ART_REPO = "binary-storage/${env.VERSION}"
-        ART_CRED_ID = 'artifactory-super-user'
+        // הערה 2: ה-ID של שרת Artifactory שהגדרת ב-Manage Jenkins -> System
+        ARTIFACTORY_SERVER_ID = 'Artifactory-TLV-Server'
+        ART_REPO_KEY = 'binary-storage' // שם הרפוזיטורי
     }
 
-    // 1.1: תיקון Agent - משתמש באימג' שיצרת
+    // הערה 1.1: Agent מתוקן - משתמש באימג' שיצרת
     agent {
         docker {
-            image 'zip-job-test' // <--- משתמש באימג' שבנית ב-Dockerfile
+            image 'zip-job-test' // <--- שם האימג' שיצרת ב-Dockerfile
             args '--privileged -u 0:0'
         }
     }
 
-    // Post actions (Email וניקוי Workspace)
+    // Post actions (הרצת מייל וניקוי Workspace בסיום)
     post {
         always {
             cleanWs()
         }
         success {
-            echo "Pipeline finished successfully. All ZIPs uploaded to Artifactory!"
+            echo "Pipeline finished successfully. Artifacts published."
             mail(
                 to: 'amirmalka26@gmail00.com',
                 subject: "Job ${env.JOB_NAME} - SUCCESS",
-                body: "Pipeline completed successfully. Check artifacts at Artifactory-TLV."
+                body: "Pipeline completed successfully. Artifacts published to Artifactory."
             )
         }
         failure {
@@ -36,36 +36,45 @@ pipeline {
 
     stages {
 
-        // 1.1: שלב Build & Run - רץ בתוך קונטיינר zip-job-test
+        // שלב 1: Build & Run Python
         stage('Build & Run Python') {
             steps {
                 echo "Running zip_job.py inside Docker image '${agent.image}'"
-                // הקובץ zip_job.py מועתק לנתיב /tmp/zip_job.py ע"י ה-Dockerfile, ומופעל בתוך הקונטיינר.
+                // הקובץ zip_job.py מופעל בתוך הקונטיינר (שכן הוא הועתק לשם ע"י ה-Dockerfile)
                 sh 'python3 /tmp/zip_job.py'
                 sh 'ls -l *.zip'
             }
         }
 
-        // 2: Publish - שימוש ב-curl (עדיין לא פלאגין Artifactory, כבסיס)
-        stage('Publish to Artifactory') {
+        // שלב 2: Publish ל-Artifactory באמצעות פלאגין (מתקן הערה 2)
+        stage('Publish to Artifactory (Plugin)') {
             steps {
-                echo "Uploading zip files to Artifactory URL: ${env.ART_URL}/${env.ART_REPO}"
+                script { // נדרש בלוק script בתוך Declarative כדי להשתמש ב-Groovy DSL של הפלאגין
 
-                withCredentials([
-                    usernamePassword(
-                        credentialsId: env.ART_CRED_ID,
-                        usernameVariable: 'ART_USER',
-                        passwordVariable: 'ART_PASS'
+                    // 1. קבלת מופע השרת מתוך הגדרות Jenkins
+                    def server = Artifactory.server ARTIFACTORY_SERVER_ID
+
+                    // 2. יצירת אובייקט Build Info (Metadata)
+                    def buildInfo = Artifactory.newBuildInfo()
+                    buildInfo.name = env.JOB_NAME
+                    buildInfo.number = env.BUILD_NUMBER
+
+                    // 3. העלאת קבצים באמצעות File Specs
+                    server.upload (
+                        // File Spec: כל קובץ .zip ב-Workspace
+                        spec: """{
+                            "files": [
+                                {
+                                    "pattern": "*.zip",
+                                    "target": "${ART_REPO_KEY}/${env.VERSION}/" // נתיב היעד
+                                }
+                            ]
+                        }""",
+                        buildInfo: buildInfo // צרף את ה-Metadata
                     )
-                ]) {
-                    // כדי לעבוד עם HTTPS ללא אישור, צריך להוסיף את הדגל --insecure,
-                    // אם כי זה פחות מומלץ בסביבת פרודקשן.
-                    sh """
-                        for f in \$(ls *.zip); do
-                            echo Uploading \$f...
-                            curl -v --insecure -u "${ART_USER}:${ART_PASS}" -T "\$f" "${env.ART_URL}/${env.ART_REPO}/\$f"
-                        done
-                    """
+
+                    // 4. פרסום המטא-דאטה של ה-Build ל-Artifactory
+                    server.publishBuildInfo buildInfo
                 }
             }
         }
