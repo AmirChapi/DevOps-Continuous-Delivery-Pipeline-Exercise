@@ -1,62 +1,72 @@
-// משתנים גלובליים
-def dockerImage = 'zip-job-test'
+// Global variables
+def dockerImage = 'zip-job-image'
 def version = '1.2.0'
-def artifactoryServerId = 'Artifactory-TLV-Server'   // לוודא תואם להגדרת השרת ב-Jenkins
-def artRepoKey = 'binary-storage'
+def artRepo = "binary-storage/${version}/"
+def artifactoryServerId = "Artifactory-TLV-Server"
 
 node('built-in') {
 
-    env.VERSION = version
-
-    // --- שלב 0: Build Docker Image מה-Dockerfile ---
+    // -------------------------
+    // Stage 1: Build Docker image
+    // -------------------------
     stage('Build Docker Image') {
-        echo "Building Docker image '${dockerImage}' from Dockerfile..."
-        sh """
-            docker build -t ${dockerImage} .
+        echo "Building docker image..."
+        bat """
+        docker build -t ${dockerImage} .
         """
     }
 
-    // שימוש ב-docker.image().inside כ"agent"
-    docker.image(dockerImage).inside {
-
-        // --- שלב 1: Build & Run Python ---
-        stage('Build & Run Python') {
-            echo "Running zip_job.py inside Docker image '${dockerImage}'"
-            sh 'python3 /tmp/zip_job.py'
-            sh 'ls -l *.zip'
-        }
-
-        // --- שלב 2: Publish to Artifactory (Plugin) ---
-        stage('Publish to Artifactory (Plugin)') {
-
-            def server = Artifactory.server(artifactoryServerId)
-
-            def buildInfo = Artifactory.newBuildInfo()
-            buildInfo.name = env.JOB_NAME
-            buildInfo.number = env.BUILD_NUMBER
-
-            server.upload(
-                spec: """{
-                    "files": [
-                        {
-                            "pattern": "*.zip",
-                            "target": "${artRepoKey}/${version}/"
-                        }
-                    ]
-                }""",
-                buildInfo: buildInfo
-            )
-
-            server.publishBuildInfo(buildInfo)
-        }
+    // -------------------------
+    // Stage 2: Run Python inside Docker
+    // -------------------------
+    stage('Run zip_job.py') {
+        echo "Running zip_job.py inside container..."
+        bat """
+        docker run --rm ^
+          -e VERSION=${version} ^
+          -v "%CD%":/workspace ^
+          -w /workspace ^
+          ${dockerImage} bash -c "python3 /tmp/zip_job.py && ls -l *.zip"
+        """
     }
 
-    // --- שלב 3: Cleanup ---
+    // -------------------------
+    // Stage 3: Upload Artifacts (Artifactory Plugin)
+    // -------------------------
+    stage('Publish to Artifactory') {
+        echo "Uploading ZIP artifacts to Artifactory..."
+
+        def server = Artifactory.server(artifactoryServerId)
+
+        def buildInfo = Artifactory.newBuildInfo()
+        buildInfo.name = env.JOB_NAME
+        buildInfo.number = env.BUILD_NUMBER
+
+        server.upload(
+            spec: """{
+                "files": [
+                    {
+                        "pattern": "*.zip",
+                        "target": "${artRepo}"
+                    }
+                ]
+            }""",
+            buildInfo: buildInfo
+        )
+
+        server.publishBuildInfo(buildInfo)
+    }
+
+    // -------------------------
+    // Stage 4: Cleanup
+    // -------------------------
     stage('Cleanup') {
         cleanWs()
     }
 
-    // --- שלב 4: Report ---
+    // -------------------------
+    // Stage 5: Report
+    // -------------------------
     stage('Report') {
         def status = currentBuild.currentResult
         mail(
