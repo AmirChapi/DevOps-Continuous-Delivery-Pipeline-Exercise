@@ -1,78 +1,72 @@
-// Global variables
-def dockerImage = 'zip-job-test'
-def version = '1.2.0'
-def artRepo = "binary-storage/${version}/"
-def artifactoryServerId = "artifactory-tlv"
+// Jenkinsfile_scripted - Final Pipeline Configuration
 
-node('built-in') {
+// הגדרת משתני סביבה גלובליים
+def ARTIFACTORY_SERVER_ID = 'artifactory-tlv' // ה-Server ID שהגדרת ב-Configure System
+def ARTIFACTORY_CREDENTIAL_ID = 'artifactory-super-user' // ה-Secret text שמכיל את ה-Access Token
+def REPO_NAME = 'binary-storage' // שם ה-Repo המקומי ב-Artifactory
+def DOCKER_IMAGE_NAME = "zip-job-test"
+def DOCKER_TAG = "1.0.${BUILD_NUMBER}" // טאג ייחודי על בסיס מספר ה-Build
+def DOCKERFILE_PATH = './Final_hw' // התיקון הקריטי: נתיב לתיקייה המכילה את ה-Dockerfile
+def PATH_TO_FILE = "Final_hw/zip_job.py" // הנתיב לקובץ Python שאותו נרצה להעלות ל-Artifactory
 
-    // -------------------------
-    // Stage 1: Build Docker image
-    // -------------------------
+node {
+    stage('Checkout Code') {
+        echo "Obtaining Jenkinsfile from git repository..."
+        // ההרשאה לגישה ל-Git מוגדרת דרך SCM ב-Configuration
+        checkout scm
+    }
+
     stage('Build Docker Image') {
-        echo "Building docker image..."
-        bat """
-        docker build -t ${dockerImage} .
-        """
+        echo "Building docker image from ${DOCKERFILE_PATH}..."
+        // שימוש בתיקון לנתיב ה-Dockerfile
+        bat "docker build -t ${DOCKER_IMAGE_NAME} ${DOCKERFILE_PATH}"
     }
 
-    // -------------------------
-    // Stage 2: Run Python inside Docker
-    // -------------------------
-    stage('Run zip_job.py') {
-        echo "Running zip_job.py inside container..."
-        bat """
-        docker run --rm ^
-          -e VERSION=${version} ^
-          -v "%CD%":/workspace ^
-          -w /workspace ^
-          ${dockerImage} bash -c "python3 /tmp/zip_job.py && ls -l *.zip"
-        """
-    }
+    stage('Publish Artifacts to Artifactory') {
+        echo "Publishing zip_job.py to Artifactory..."
 
-    // -------------------------
-    // Stage 3: Upload Artifacts (Artifactory Plugin)
-    // -------------------------
-    stage('Publish to Artifactory') {
-        echo "Uploading ZIP artifacts to Artifactory..."
+        // הגדרת ה-Artifactory Server באמצעות ה-ID שמוגדר במערכת
+        def server = Artifactory.server ARTIFACTORY_SERVER_ID
 
-        def server = Artifactory.server(artifactoryServerId)
-
-        def buildInfo = Artifactory.newBuildInfo()
-        buildInfo.name = env.JOB_NAME
-        buildInfo.number = env.BUILD_NUMBER
-
-        server.upload(
+        // 1. פרסום הארטיפקט
+        def buildInfo = server.upload(
+            // הגדרות העלאה
+            repo: REPO_NAME,
             spec: """{
                 "files": [
                     {
-                        "pattern": "*.zip",
-                        "target": "${artRepo}"
+                        "pattern": "${PATH_TO_FILE}",
+                        "target": "py-repo/${DOCKER_IMAGE_NAME}/${DOCKER_TAG}/"
                     }
                 ]
-            }""",
-            buildInfo: buildInfo
+            }"""
         )
 
-        server.publishBuildInfo(buildInfo)
+        // 2. פרסום מידע ה-Build
+        buildInfo.env.capture = true
+        buildInfo.retention(maxBuilds: 5)
+        server.publishBuildInfo buildInfo
     }
 
-    // -------------------------
-    // Stage 4: Cleanup
-    // -------------------------
-    stage('Cleanup') {
-        cleanWs()
+    stage('Tag and Push Docker Image') {
+        echo "Tagging and pushing Docker image to Artifactory..."
+
+        // 1. יצירת הטאג עבור Artifactory
+        def artifactoryRepo = "localhost:8081/docker/${REPO_NAME}" // כתובת Artifactory Docker Repo
+        def finalTag = "${artifactoryRepo}/${DOCKER_IMAGE_NAME}:${DOCKER_TAG}"
+
+        // 2. Tag ושליחה (Push)
+        bat "docker tag ${DOCKER_IMAGE_NAME} ${finalTag}"
+
+        // 3. Login והעלאה (משתמש ב-Credential שהגדרת: artifactory-super-user)
+        docker.withRegistry("http://${artifactoryRepo}", ARTIFACTORY_CREDENTIAL_ID) {
+            bat "docker push ${finalTag}"
+        }
     }
 
-    // -------------------------
-    // Stage 5: Report
-    // -------------------------
-    stage('Report') {
-        def status = currentBuild.currentResult
-        mail(
-            to: 'amirmalka26@gmail.com',
-            subject: "Job ${env.JOB_NAME} #${env.BUILD_NUMBER} - ${status}",
-            body: "Result: ${status}\nConsole log: ${env.BUILD_URL}console"
-        )
+    stage('Send Notification') {
+        echo "Sending success notification..."
+        // הודעה על הצלחה (ניתן להוסיף כאן לוגיקה של שליחת מייל)
+        currentBuild.result = 'SUCCESS'
     }
 }
